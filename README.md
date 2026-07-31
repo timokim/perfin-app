@@ -34,17 +34,47 @@ firebase deploy --only firestore:rules
 cp .env.example .env.local
 ```
 
-Fill in:
+These values come from the Firebase web app config you created in step 1:
+
+1. Open [Firebase Console](https://console.firebase.google.com/) → select your project.
+2. Click the gear icon next to **Project overview** → **Settings**.
+3. In the General tab, scroll down to **Your apps**. If you do not have a web app yet, click **Add app** → **Web** (`</>`), register it (nickname is enough; hosting is optional).
+4. Under that app, open the **SDK setup and configuration** panel and choose **Config** (not npm). You will see an object like:
+
+```js
+const firebaseConfig = {
+  apiKey: "...",
+  authDomain: "your-project.firebaseapp.com",
+  projectId: "your-project",
+  storageBucket: "your-project.appspot.com",
+  messagingSenderId: "...",
+  appId: "1:...:web:...",
+};
+```
+
+Map those fields into `.env.local`:
+
+| `.env.local` variable | Firebase config field |
+| --- | --- |
+| `NEXT_PUBLIC_FIREBASE_API_KEY` | `apiKey` |
+| `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` | `authDomain` |
+| `NEXT_PUBLIC_FIREBASE_PROJECT_ID` | `projectId` |
+| `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` | `storageBucket` |
+| `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` | `messagingSenderId` |
+| `NEXT_PUBLIC_FIREBASE_APP_ID` | `appId` |
+
+Example:
 
 ```
-NEXT_PUBLIC_FIREBASE_API_KEY=...
-NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=...
-NEXT_PUBLIC_FIREBASE_PROJECT_ID=...
-NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=...
-NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=...
-NEXT_PUBLIC_FIREBASE_APP_ID=...
+NEXT_PUBLIC_FIREBASE_API_KEY=AIza...
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
+NEXT_PUBLIC_FIREBASE_PROJECT_ID=your-project
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=your-project.appspot.com
+NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=123456789012
+NEXT_PUBLIC_FIREBASE_APP_ID=1:123456789012:web:abcdef123456
 ```
 
+These are client-side Firebase web config values (safe to expose in the browser). Access control still comes from Auth + Firestore security rules.
 ### 4. Run locally
 
 ```bash

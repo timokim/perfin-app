@@ -27,23 +27,50 @@ export default function DashboardPage() {
     const inMonth = transactions.filter(
       (t) => t.date >= start && t.date <= end,
     );
-    let income = 0;
-    let expense = 0;
     let uncategorized = 0;
-    const byCategory = new Map<string | null, number>();
+    // Per category: expenses minus income (refunds). Uncategorized uses null key.
+    const byCategory = new Map<
+      string | null,
+      { expense: number; income: number }
+    >();
 
     for (const t of inMonth) {
-      income += t.income;
-      expense += t.expense;
       if (!t.categoryId && t.expense > 0) uncategorized += 1;
-      if (t.expense > 0) {
-        const key = t.categoryId;
-        byCategory.set(key, (byCategory.get(key) ?? 0) + t.expense);
+      if (t.expense === 0 && t.income === 0) continue;
+      const key = t.categoryId;
+      const prev = byCategory.get(key) ?? { expense: 0, income: 0 };
+      prev.expense += t.expense;
+      prev.income += t.income;
+      byCategory.set(key, prev);
+    }
+
+    let income = 0;
+    let expense = 0;
+    for (const [id, bucket] of byCategory) {
+      if (bucket.expense > 0) {
+        // Categorized: refunds in the same category reduce spend.
+        // Uncategorized: always count full spend; its income stays in Income
+        // so paychecks left uncategorized don't wipe the Expenses total.
+        if (id === null) {
+          expense += bucket.expense;
+          income += bucket.income;
+        } else {
+          expense += bucket.expense - bucket.income;
+        }
+      } else {
+        income += bucket.income;
       }
     }
 
+    // Include categories that had spend even when refunds make the month net-negative.
     const categoryRows = Array.from(byCategory.entries())
-      .map(([id, amount]) => {
+      .filter(([, bucket]) => bucket.expense > 0)
+      .map(([id, bucket]) => {
+        // Match the Expenses card: uncategorized shows gross spend; others are net.
+        const amount =
+          id === null
+            ? bucket.expense
+            : bucket.expense - bucket.income;
         const cat = id
           ? categories.find((c) => c.id === id)
           : null;
@@ -54,9 +81,12 @@ export default function DashboardPage() {
           amount,
         };
       })
+      .filter((row) => row.amount !== 0)
       .sort((a, b) => b.amount - a.amount);
 
-    const max = categoryRows[0]?.amount ?? 1;
+    const maxAbs =
+      categoryRows.reduce((m, row) => Math.max(m, Math.abs(row.amount)), 0) ||
+      1;
 
     return {
       income,
@@ -65,7 +95,7 @@ export default function DashboardPage() {
       uncategorized,
       count: inMonth.length,
       categoryRows,
-      max,
+      maxAbs,
       hasAccounts: accounts.some((a) => !a.archived),
     };
   }, [transactions, categories, accounts, month]);
@@ -182,15 +212,23 @@ export default function DashboardPage() {
                     />
                     {row.name}
                   </span>
-                  <span className="tabular-nums text-ink-muted">
+                  <span
+                    className={`tabular-nums ${
+                      row.amount < 0 ? "text-success" : "text-ink-muted"
+                    }`}
+                  >
                     {formatMoney(row.amount)}
                   </span>
                 </div>
-                <div className="h-2 overflow-hidden rounded-full bg-paper-deep">
+                <div
+                  className={`flex h-2 overflow-hidden rounded-full bg-paper-deep ${
+                    row.amount < 0 ? "justify-end" : "justify-start"
+                  }`}
+                >
                   <div
                     className="h-full rounded-full transition-all duration-500"
                     style={{
-                      width: `${Math.max(4, (row.amount / stats.max) * 100)}%`,
+                      width: `${Math.max(4, (Math.abs(row.amount) / stats.maxAbs) * 100)}%`,
                       background: row.color,
                     }}
                   />
