@@ -14,9 +14,13 @@ import {
 import {
   ACCOUNT_COLORS,
   ACCOUNT_TYPE_LABELS,
+  BUDGET_BUCKET_LABELS,
+  BUDGET_BUCKETS,
   CATEGORY_COLORS,
+  isSpecialCategoryName,
   type Account,
   type AccountType,
+  type BudgetBucket,
 } from "@/lib/types";
 import { formatDate } from "@/lib/format";
 import { Pencil, Plus, Trash2 } from "lucide-react";
@@ -29,6 +33,9 @@ export default function SettingsPage() {
   const [accountColor, setAccountColor] = useState(ACCOUNT_COLORS[0]);
   const [categoryName, setCategoryName] = useState("");
   const [categoryColor, setCategoryColor] = useState(CATEGORY_COLORS[0]);
+  const [categoryBucket, setCategoryBucket] = useState<BudgetBucket | "">(
+    "",
+  );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
@@ -92,8 +99,10 @@ export default function SettingsPage() {
       await createCategory(user.uid, {
         name: categoryName.trim(),
         color: categoryColor,
+        budgetBucket: categoryBucket || null,
       });
       setCategoryName("");
+      setCategoryBucket("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create category");
     } finally {
@@ -369,12 +378,14 @@ export default function SettingsPage() {
       <section className="surface rounded-2xl p-5 sm:p-6 animate-rise stagger-2">
         <h2 className="font-display text-xl text-navy">Categories</h2>
         <p className="mt-1 text-sm text-ink-muted">
-          Food, Home, Utility, Misc — yours to define and edit.
+          Food, Home, Utility, Misc — yours to define. Map each to a budget
+          bucket so the Budget page can track giving, living costs, and
+          discretionary room. Income and Ignore stay special and are not mapped.
         </p>
 
         <form
           onSubmit={addCategory}
-          className="mt-5 grid gap-3 sm:grid-cols-[1fr_auto_auto] sm:items-end"
+          className="mt-5 grid gap-3 sm:grid-cols-[1fr_12rem_auto_auto] sm:items-end"
         >
           <div>
             <label className="label" htmlFor="cat-name">
@@ -388,6 +399,28 @@ export default function SettingsPage() {
               onChange={(e) => setCategoryName(e.target.value)}
               required
             />
+          </div>
+          <div>
+            <label className="label" htmlFor="cat-bucket">
+              Budget bucket
+            </label>
+            <select
+              id="cat-bucket"
+              className="select"
+              value={categoryBucket}
+              onChange={(e) =>
+                setCategoryBucket(
+                  (e.target.value || "") as BudgetBucket | "",
+                )
+              }
+            >
+              <option value="">None</option>
+              {BUDGET_BUCKETS.map((b) => (
+                <option key={b} value={b}>
+                  {BUDGET_BUCKET_LABELS[b]}
+                </option>
+              ))}
+            </select>
           </div>
           <div>
             <label className="label">Color</label>
@@ -413,54 +446,84 @@ export default function SettingsPage() {
         </form>
 
         <ul className="mt-6 divide-y divide-line">
-          {sortedCategories.map((c) => (
-            <li
-              key={c.id}
-              className={`flex items-center gap-3 py-3 ${c.archived ? "opacity-50" : ""}`}
-            >
-              <span
-                className="h-3 w-3 shrink-0 rounded-full"
-                style={{ background: c.color }}
-              />
-              <div className="min-w-0 flex-1">
-                <p className="truncate font-semibold">{c.name}</p>
-                {c.archived && (
-                  <p className="text-xs text-ink-muted">archived</p>
+          {sortedCategories.map((c) => {
+            const special =
+              isSpecialCategoryName(c.name, "income") ||
+              isSpecialCategoryName(c.name, "ignore");
+            return (
+              <li
+                key={c.id}
+                className={`flex flex-wrap items-center gap-3 py-3 ${c.archived ? "opacity-50" : ""}`}
+              >
+                <span
+                  className="h-3 w-3 shrink-0 rounded-full"
+                  style={{ background: c.color }}
+                />
+                <div className="min-w-0 flex-1 basis-32">
+                  <p className="truncate font-semibold">{c.name}</p>
+                  {c.archived && (
+                    <p className="text-xs text-ink-muted">archived</p>
+                  )}
+                </div>
+                {special ? (
+                  <span className="text-xs font-semibold text-ink-muted">
+                    System category
+                  </span>
+                ) : (
+                  <select
+                    className="select w-auto min-w-[11rem] !py-1.5 text-sm"
+                    value={c.budgetBucket ?? ""}
+                    aria-label={`Budget bucket for ${c.name}`}
+                    onChange={(e) =>
+                      user &&
+                      updateCategory(user.uid, c.id, {
+                        budgetBucket: (e.target.value ||
+                          null) as BudgetBucket | null,
+                      })
+                    }
+                  >
+                    <option value="">No budget bucket</option>
+                    {BUDGET_BUCKETS.map((b) => (
+                      <option key={b} value={b}>
+                        {BUDGET_BUCKET_LABELS[b]}
+                      </option>
+                    ))}
+                  </select>
                 )}
-              </div>
-              <button
-                type="button"
-                className="btn btn-ghost !px-2 !py-2"
-                onClick={() => renameCategory(c.id, c.name)}
-              >
-                <Pencil size={14} />
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost !px-2 !py-2"
-                onClick={() =>
-                  user &&
-                  updateCategory(user.uid, c.id, { archived: !c.archived })
-                }
-              >
-                {c.archived ? "Restore" : "Archive"}
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost !px-2 !py-2 text-danger"
-                onClick={() => {
-                  if (
+                <button
+                  type="button"
+                  className="btn btn-ghost !px-2 !py-2"
+                  onClick={() => renameCategory(c.id, c.name)}
+                >
+                  <Pencil size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost !px-2 !py-2"
+                  onClick={() =>
                     user &&
-                    window.confirm(`Delete category “${c.name}”?`)
-                  ) {
-                    deleteCategory(user.uid, c.id);
+                    updateCategory(user.uid, c.id, { archived: !c.archived })
                   }
-                }}
-              >
-                <Trash2 size={14} />
-              </button>
-            </li>
-          ))}
+                >
+                  {c.archived ? "Restore" : "Archive"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost !px-2 !py-2 text-danger"
+                  onClick={() => {
+                    if (
+                      user &&
+                      window.confirm(`Delete category “${c.name}”?`)
+                    ) {
+                      deleteCategory(user.uid, c.id);
+                    }
+                  }}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </li>
+            );
+          })}
         </ul>
       </section>
     </div>

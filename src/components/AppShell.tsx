@@ -9,11 +9,13 @@ import {
   Upload,
   Settings,
   LogOut,
+  PiggyBank,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 
 const NAV = [
   { href: "/app", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/app/budget", label: "Budget", icon: PiggyBank },
   { href: "/app/transactions", label: "Transactions", icon: ArrowLeftRight },
   { href: "/app/import", label: "Import", icon: Upload },
   { href: "/app/settings", label: "Settings", icon: Settings },

@@ -11,15 +11,23 @@ import {
 import { useAuth } from "@/lib/auth-context";
 import {
   listenAccounts,
+  listenBudgetConfig,
   listenCategories,
   listenTransactions,
 } from "@/lib/firebase/data";
-import type { Account, Category, Transaction } from "@/lib/types";
+import {
+  DEFAULT_BUDGET_CONFIG,
+  type Account,
+  type BudgetConfig,
+  type Category,
+  type Transaction,
+} from "@/lib/types";
 
 interface DataContextValue {
   accounts: Account[];
   categories: Category[];
   transactions: Transaction[];
+  budgetConfig: BudgetConfig;
   loading: boolean;
   activeAccounts: Account[];
   activeCategories: Category[];
@@ -31,6 +39,7 @@ const EMPTY: DataContextValue = {
   accounts: [],
   categories: [],
   transactions: [],
+  budgetConfig: { ...DEFAULT_BUDGET_CONFIG, updatedAt: new Date(0) },
   loading: false,
   activeAccounts: [],
   activeCategories: [],
@@ -46,7 +55,16 @@ function AuthenticatedDataProvider({
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [ready, setReady] = useState({ a: false, c: false, t: false });
+  const [budgetConfig, setBudgetConfig] = useState<BudgetConfig>({
+    ...DEFAULT_BUDGET_CONFIG,
+    updatedAt: new Date(0),
+  });
+  const [ready, setReady] = useState({
+    a: false,
+    c: false,
+    t: false,
+    b: false,
+  });
 
   useEffect(() => {
     const unsubA = listenAccounts(uid, (a) => {
@@ -61,10 +79,15 @@ function AuthenticatedDataProvider({
       setTransactions(t);
       setReady((r) => ({ ...r, t: true }));
     });
+    const unsubB = listenBudgetConfig(uid, (b) => {
+      setBudgetConfig(b);
+      setReady((r) => ({ ...r, b: true }));
+    });
     return () => {
       unsubA();
       unsubC();
       unsubT();
+      unsubB();
     };
   }, [uid]);
 
@@ -75,11 +98,12 @@ function AuthenticatedDataProvider({
       accounts,
       categories,
       transactions,
-      loading: !(ready.a && ready.c && ready.t),
+      budgetConfig,
+      loading: !(ready.a && ready.c && ready.t && ready.b),
       activeAccounts,
       activeCategories,
     };
-  }, [accounts, categories, transactions, ready]);
+  }, [accounts, categories, transactions, budgetConfig, ready]);
 
   return (
     <DataContext.Provider value={value}>{children}</DataContext.Provider>

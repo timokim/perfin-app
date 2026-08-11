@@ -17,3 +17,11 @@ export function importsCol(uid: string) {
 export function transactionsCol(uid: string) {
   return `users/${uid}/transactions`;
 }
+
+export function settingsCol(uid: string) {
+  return `users/${uid}/settings`;
+}
+
+export function budgetSettingsDoc(uid: string) {
+  return `${settingsCol(uid)}/budget`;
+}

@@ -1,6 +1,7 @@
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   setDoc,
   addDoc,
@@ -17,15 +18,20 @@ import {
 import { getClientDb } from "./client";
 import {
   accountsCol,
+  budgetSettingsDoc,
   categoriesCol,
   importsCol,
   transactionsCol,
   userDoc,
 } from "./paths";
 import {
+  DEFAULT_BUDGET_CONFIG,
   DEFAULT_CATEGORIES,
+  isBudgetBucket,
   type Account,
   type AccountType,
+  type BudgetBucket,
+  type BudgetConfig,
   type Category,
   type ColumnMapping,
   type ImportRecord,
@@ -33,6 +39,27 @@ import {
   type Transaction,
 } from "@/lib/types";
 import { fingerprintRow } from "@/lib/csv/normalize";
+
+function parseBudgetConfig(data: Record<string, unknown>): BudgetConfig {
+  return {
+    tithePct: Number(data.tithePct) || DEFAULT_BUDGET_CONFIG.tithePct,
+    parentsPct: Number(data.parentsPct) || DEFAULT_BUDGET_CONFIG.parentsPct,
+    godGivingPct:
+      Number(data.godGivingPct) || DEFAULT_BUDGET_CONFIG.godGivingPct,
+    weeklyOffering:
+      Number(data.weeklyOffering) || DEFAULT_BUDGET_CONFIG.weeklyOffering,
+    savePct: Number(data.savePct) || DEFAULT_BUDGET_CONFIG.savePct,
+    godProjectsPct:
+      Number(data.godProjectsPct) || DEFAULT_BUDGET_CONFIG.godProjectsPct,
+    discretionaryPct:
+      Number(data.discretionaryPct) || DEFAULT_BUDGET_CONFIG.discretionaryPct,
+    currency:
+      typeof data.currency === "string" && data.currency
+        ? data.currency
+        : DEFAULT_BUDGET_CONFIG.currency,
+    updatedAt: tsToDate(data.updatedAt),
+  };
+}
 
 function tsToDate(value: unknown): Date {
   if (value instanceof Timestamp) return value.toDate();
@@ -47,12 +74,22 @@ export async function ensureUserSeeded(uid: string): Promise<void> {
   const db = getClientDb();
   const userRef = doc(db, userDoc(uid));
   const catsSnap = await getDocs(collection(db, categoriesCol(uid)));
+  const budgetRef = doc(db, budgetSettingsDoc(uid));
 
   await setDoc(
     userRef,
     { createdAt: Timestamp.now(), seededAt: Timestamp.now() },
     { merge: true },
   );
+
+  // Budget config: create defaults if missing (new and existing users).
+  const budgetSnap = await getDoc(budgetRef);
+  if (!budgetSnap.exists()) {
+    await setDoc(budgetRef, {
+      ...DEFAULT_BUDGET_CONFIG,
+      updatedAt: Timestamp.now(),
+    });
+  }
 
   if (catsSnap.empty) {
     const batch = writeBatch(db);
@@ -134,11 +171,41 @@ export function listenCategories(
         color: data.color as string,
         iconKey: data.iconKey as string | undefined,
         archived: Boolean(data.archived),
+        budgetBucket: isBudgetBucket(data.budgetBucket)
+          ? data.budgetBucket
+          : null,
         createdAt: tsToDate(data.createdAt),
       };
     });
     cb(categories);
   });
+}
+
+export function listenBudgetConfig(
+  uid: string,
+  cb: (config: BudgetConfig) => void,
+): Unsubscribe {
+  const db = getClientDb();
+  const ref = doc(db, budgetSettingsDoc(uid));
+  return onSnapshot(ref, (snap) => {
+    if (!snap.exists()) {
+      cb({ ...DEFAULT_BUDGET_CONFIG, updatedAt: new Date() });
+      return;
+    }
+    cb(parseBudgetConfig(snap.data() as Record<string, unknown>));
+  });
+}
+
+export async function updateBudgetConfig(
+  uid: string,
+  patch: Partial<Omit<BudgetConfig, "updatedAt">>,
+): Promise<void> {
+  const db = getClientDb();
+  await setDoc(
+    doc(db, budgetSettingsDoc(uid)),
+    { ...patch, updatedAt: Timestamp.now() },
+    { merge: true },
+  );
 }
 
 export function listenTransactions(
@@ -200,11 +267,19 @@ export async function deleteAccount(uid: string, id: string): Promise<void> {
 
 export async function createCategory(
   uid: string,
-  input: { name: string; color: string; iconKey?: string },
+  input: {
+    name: string;
+    color: string;
+    iconKey?: string;
+    budgetBucket?: BudgetBucket | null;
+  },
 ): Promise<string> {
   const db = getClientDb();
   const ref = await addDoc(collection(db, categoriesCol(uid)), {
-    ...input,
+    name: input.name,
+    color: input.color,
+    iconKey: input.iconKey ?? null,
+    budgetBucket: input.budgetBucket ?? null,
     archived: false,
     createdAt: Timestamp.now(),
   });
@@ -214,10 +289,19 @@ export async function createCategory(
 export async function updateCategory(
   uid: string,
   id: string,
-  patch: Partial<Pick<Category, "name" | "color" | "iconKey" | "archived">>,
+  patch: Partial<
+    Pick<Category, "name" | "color" | "iconKey" | "archived" | "budgetBucket">
+  >,
 ): Promise<void> {
   const db = getClientDb();
-  await updateDoc(doc(db, categoriesCol(uid), id), patch);
+  const cleaned: Record<string, unknown> = { ...patch };
+  if ("budgetBucket" in patch && patch.budgetBucket === undefined) {
+    delete cleaned.budgetBucket;
+  }
+  if (patch.budgetBucket === null) {
+    cleaned.budgetBucket = null;
+  }
+  await updateDoc(doc(db, categoriesCol(uid), id), cleaned);
 }
 
 export async function deleteCategory(uid: string, id: string): Promise<void> {
