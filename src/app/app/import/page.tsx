@@ -6,7 +6,7 @@ import { useAuth } from "@/lib/auth-context";
 import { useData } from "@/lib/data-context";
 import { parseCsvFile } from "@/lib/csv/parse";
 import { inferColumnMapping } from "@/lib/csv/infer";
-import { normalizeRow } from "@/lib/csv/normalize";
+import { fingerprintRow, normalizeRow } from "@/lib/csv/normalize";
 import { importTransactions } from "@/lib/firebase/data";
 import { formatDate, formatMoney } from "@/lib/format";
 import type { AmountMode, ColumnMapping, NormalizedRow } from "@/lib/types";
@@ -14,7 +14,14 @@ import { CheckCircle2, FileSpreadsheet, Upload, X } from "lucide-react";
 
 type Step = "upload" | "map" | "preview" | "done";
 
-type PreviewRow = NormalizedRow & { sourceIndex: number };
+type PreviewRow = NormalizedRow & {
+  sourceIndex: number;
+  fingerprint: string;
+  /** Already in Firestore for this account. */
+  alreadyImported: boolean;
+  /** Same fingerprint appears earlier in this CSV. */
+  duplicateInFile: boolean;
+};
 
 const AMOUNT_MODE_LABELS: Record<AmountMode, string> = {
   signed: "Single amount (signed +/-)",
@@ -25,7 +32,7 @@ const AMOUNT_MODE_LABELS: Record<AmountMode, string> = {
 
 export default function ImportPage() {
   const { user } = useAuth();
-  const { activeAccounts } = useData();
+  const { activeAccounts, transactions } = useData();
   const [step, setStep] = useState<Step>("upload");
   const [filename, setFilename] = useState("");
   const [headers, setHeaders] = useState<string[]>([]);
@@ -42,24 +49,59 @@ export default function ImportPage() {
     skipped: number;
   } | null>(null);
 
+  const existingFingerprints = useMemo(() => {
+    if (!accountId) return new Set<string>();
+    return new Set(
+      transactions
+        .filter((t) => t.accountId === accountId)
+        .map((t) => t.fingerprint),
+    );
+  }, [transactions, accountId]);
+
   const allNormalized = useMemo((): PreviewRow[] => {
     if (!mapping) return [];
     const out: PreviewRow[] = [];
+    const seenInFile = new Set<string>();
+    // Fingerprints need an account; before one is chosen, treat rows as not-yet-imported.
+    const accountKey = accountId || "__pending__";
     rows.forEach((row, sourceIndex) => {
       const n = normalizeRow(row, mapping);
       if (!n) return;
+      const fp = fingerprintRow(n, accountKey);
+      const duplicateInFile = seenInFile.has(fp);
+      seenInFile.add(fp);
       out.push({
         ...n,
         sourceIndex,
         note: notes[sourceIndex] ?? "",
+        fingerprint: fp,
+        alreadyImported: Boolean(accountId) && existingFingerprints.has(fp),
+        duplicateInFile,
       });
     });
     return out;
-  }, [rows, mapping, notes]);
+  }, [rows, mapping, notes, accountId, existingFingerprints]);
 
   const included = useMemo(
     () => allNormalized.filter((r) => !excluded.has(r.sourceIndex)),
     [allNormalized, excluded],
+  );
+
+  const newToImport = useMemo(
+    () =>
+      included.filter((r) => !r.alreadyImported && !r.duplicateInFile),
+    [included],
+  );
+
+  const alreadyImportedCount = useMemo(
+    () => included.filter((r) => r.alreadyImported).length,
+    [included],
+  );
+
+  const duplicateInFileCount = useMemo(
+    () =>
+      included.filter((r) => !r.alreadyImported && r.duplicateInFile).length,
+    [included],
   );
 
   const onFile = useCallback(async (file: File) => {
@@ -90,7 +132,7 @@ export default function ImportPage() {
   }
 
   async function runImport() {
-    if (!user || !mapping || !accountId || included.length === 0) return;
+    if (!user || !mapping || !accountId || newToImport.length === 0) return;
     setBusy(true);
     setError(null);
     try {
@@ -98,11 +140,22 @@ export default function ImportPage() {
         filename,
         accountId,
         mapping,
-        rows: included.map(({ sourceIndex: _, ...row }) => row),
+        rows: newToImport.map(
+          ({
+            sourceIndex: _s,
+            fingerprint: _f,
+            alreadyImported: _a,
+            duplicateInFile: _d,
+            ...row
+          }) => row,
+        ),
       });
       setResult({
         imported: record.importedCount,
-        skipped: record.skippedCount,
+        skipped:
+          record.skippedCount +
+          alreadyImportedCount +
+          duplicateInFileCount,
       });
       setStep("done");
     } catch (err) {
@@ -428,9 +481,17 @@ export default function ImportPage() {
               <div>
                 <h2 className="font-display text-xl text-navy">Review</h2>
                 <p className="text-sm text-ink-muted">
-                  {included.length} to import
-                  {excluded.size > 0 ? ` · ${excluded.size} removed` : ""}
-                  . Add notes for opaque bank memos; remove junk rows before
+                  <span className="font-semibold text-navy">
+                    {newToImport.length} new
+                  </span>
+                  {alreadyImportedCount > 0
+                    ? ` · ${alreadyImportedCount} already imported`
+                    : ""}
+                  {duplicateInFileCount > 0
+                    ? ` · ${duplicateInFileCount} duplicate in file`
+                    : ""}
+                  {excluded.size > 0 ? ` · ${excluded.size} removed` : ""}. Add
+                  notes for opaque bank memos; remove junk rows before
                   importing.
                 </p>
               </div>
@@ -445,9 +506,10 @@ export default function ImportPage() {
               )}
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[48rem] text-left text-sm">
+              <table className="w-full min-w-[52rem] text-left text-sm">
                 <thead className="bg-paper-deep/60 text-ink-muted">
                   <tr>
+                    <th className="px-4 py-3 font-semibold">Status</th>
                     <th className="px-4 py-3 font-semibold">Date</th>
                     <th className="px-4 py-3 font-semibold">Description</th>
                     <th className="px-4 py-3 font-semibold">Note</th>
@@ -464,51 +526,83 @@ export default function ImportPage() {
                   {included.length === 0 && (
                     <tr>
                       <td
-                        colSpan={6}
+                        colSpan={7}
                         className="px-4 py-12 text-center text-ink-muted"
                       >
                         All rows removed. Restore some to continue.
                       </td>
                     </tr>
                   )}
-                  {included.map((row) => (
-                    <tr key={row.sourceIndex} className="border-t border-line">
-                      <td className="px-4 py-2.5 whitespace-nowrap align-top">
-                        {formatDate(row.date)}
-                      </td>
-                      <td className="px-4 py-2.5 max-w-[14rem] align-top font-medium">
-                        <span className="line-clamp-2">{row.description}</span>
-                      </td>
-                      <td className="px-4 py-2 align-top">
-                        <input
-                          className="input !py-1.5 text-sm"
-                          placeholder="Add a note…"
-                          value={row.note ?? ""}
-                          onChange={(e) =>
-                            setNote(row.sourceIndex, e.target.value)
-                          }
-                          aria-label={`Note for ${row.description}`}
-                        />
-                      </td>
-                      <td className="px-4 py-2.5 text-right tabular-nums text-success align-top">
-                        {row.income ? formatMoney(row.income) : "—"}
-                      </td>
-                      <td className="px-4 py-2.5 text-right tabular-nums align-top">
-                        {row.expense ? formatMoney(row.expense) : "—"}
-                      </td>
-                      <td className="px-4 py-2.5 text-right align-top">
-                        <button
-                          type="button"
-                          className="inline-flex rounded-md p-1.5 text-ink-muted hover:bg-red-50 hover:text-danger"
-                          onClick={() => removeRow(row.sourceIndex)}
-                          aria-label={`Remove ${row.description}`}
-                          title="Remove row"
+                  {included.map((row) => {
+                    const isNew =
+                      !row.alreadyImported && !row.duplicateInFile;
+                    return (
+                      <tr
+                        key={row.sourceIndex}
+                        className={`border-t border-line ${
+                          isNew ? "" : "bg-paper-deep/25 text-ink-muted"
+                        }`}
+                      >
+                        <td className="px-4 py-2.5 whitespace-nowrap align-top">
+                          {row.alreadyImported ? (
+                            <span className="text-xs font-semibold text-ink-muted">
+                              Already imported
+                            </span>
+                          ) : row.duplicateInFile ? (
+                            <span className="text-xs font-semibold text-amber">
+                              Duplicate in file
+                            </span>
+                          ) : (
+                            <span className="text-xs font-semibold text-success">
+                              New
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 whitespace-nowrap align-top">
+                          {formatDate(row.date)}
+                        </td>
+                        <td className="px-4 py-2.5 max-w-[14rem] align-top font-medium">
+                          <span className="line-clamp-2">{row.description}</span>
+                        </td>
+                        <td className="px-4 py-2 align-top">
+                          {isNew ? (
+                            <input
+                              className="input !py-1.5 text-sm"
+                              placeholder="Add a note…"
+                              value={row.note ?? ""}
+                              onChange={(e) =>
+                                setNote(row.sourceIndex, e.target.value)
+                              }
+                              aria-label={`Note for ${row.description}`}
+                            />
+                          ) : (
+                            <span className="text-xs">—</span>
+                          )}
+                        </td>
+                        <td
+                          className={`px-4 py-2.5 text-right tabular-nums align-top ${
+                            isNew ? "text-success" : ""
+                          }`}
                         >
-                          <X size={16} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                          {row.income ? formatMoney(row.income) : "—"}
+                        </td>
+                        <td className="px-4 py-2.5 text-right tabular-nums align-top">
+                          {row.expense ? formatMoney(row.expense) : "—"}
+                        </td>
+                        <td className="px-4 py-2.5 text-right align-top">
+                          <button
+                            type="button"
+                            className="inline-flex rounded-md p-1.5 text-ink-muted hover:bg-red-50 hover:text-danger"
+                            onClick={() => removeRow(row.sourceIndex)}
+                            aria-label={`Remove ${row.description}`}
+                            title="Remove row"
+                          >
+                            <X size={16} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -524,12 +618,14 @@ export default function ImportPage() {
             <button
               type="button"
               className="btn btn-amber"
-              disabled={busy || included.length === 0}
+              disabled={busy || newToImport.length === 0}
               onClick={() => void runImport()}
             >
               {busy
                 ? "Importing…"
-                : `Import ${included.length} transaction${included.length === 1 ? "" : "s"}`}
+                : newToImport.length === 0
+                  ? "Nothing new to import"
+                  : `Import ${newToImport.length} new transaction${newToImport.length === 1 ? "" : "s"}`}
             </button>
           </div>
         </div>
