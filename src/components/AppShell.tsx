@@ -6,7 +6,7 @@ import { useEffect } from "react";
 import {
   LayoutDashboard,
   ArrowLeftRight,
-  Upload,
+  Plus,
   Settings,
   LogOut,
   PiggyBank,
@@ -17,7 +17,7 @@ const NAV = [
   { href: "/app", label: "Dashboard", icon: LayoutDashboard },
   { href: "/app/budget", label: "Budget", icon: PiggyBank },
   { href: "/app/transactions", label: "Transactions", icon: ArrowLeftRight },
-  { href: "/app/import", label: "Import", icon: Upload },
+  { href: "/app/add", label: "Add", icon: Plus },
   { href: "/app/settings", label: "Settings", icon: Settings },
 ];
 

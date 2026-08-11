@@ -97,7 +97,7 @@ Authorized domains: in Firebase Auth → Settings → Authorized domains, add yo
 
 1. **Sign up / sign in**
 2. **Settings** — create accounts (Amex, TD Chequing, …) and categories (Food, Home, …). Defaults for categories are seeded on first login.
-3. **Import** — drop a CSV. Outlay infers date / description / amount columns; confirm the mapping and pick the account.
+3. **Add** — import a bank CSV or enter a transaction manually (cash, etc.). CSV import infers columns; confirm the mapping and pick the account.
 4. **Transactions** — assign categories inline or multi-select for bulk assign. Filter to uncategorized to clear the backlog.
 5. **Dashboard** — income, expenses, and spend-by-category for a time range (month, last 30/60 days, MTD/YTD, or custom dates). Transactions in **Ignore** are excluded from dashboard totals; **Income** stays out of spend-by-category.
 6. **Budget** — lifetime giving obligations (십일조 / parents / God / weekly 헌금), living spend, and the 30/5/65 split of what remains. Map categories to budget buckets in Settings.

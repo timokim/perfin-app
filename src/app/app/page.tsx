@@ -35,6 +35,14 @@ export default function DashboardPage() {
     return ids;
   }, [categories]);
 
+  const incomeCategoryIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const c of categories) {
+      if (isSpecialCategoryName(c.name, "income")) ids.add(c.id);
+    }
+    return ids;
+  }, [categories]);
+
   const stats = useMemo(() => {
     const inRange = transactions.filter(
       (t) =>
@@ -43,56 +51,41 @@ export default function DashboardPage() {
         !(t.categoryId && ignoreCategoryIds.has(t.categoryId)),
     );
     let uncategorized = 0;
-    // Per category: expenses minus income (refunds). Uncategorized uses null key.
-    const byCategory = new Map<
-      string | null,
-      { expense: number; income: number }
-    >();
+    let income = 0;
+    let expense = 0;
+    // Per category net (expense − income/refunds). Uncategorized uses null key.
+    const byCategory = new Map<string | null, number>();
 
     for (const t of inRange) {
       if (!t.categoryId && t.expense > 0) uncategorized += 1;
       if (t.expense === 0 && t.income === 0) continue;
-      const key = t.categoryId;
-      const prev = byCategory.get(key) ?? { expense: 0, income: 0 };
-      prev.expense += t.expense;
-      prev.income += t.income;
-      byCategory.set(key, prev);
-    }
 
-    let income = 0;
-    let expense = 0;
-    for (const [id, bucket] of byCategory) {
-      if (bucket.expense > 0) {
-        // Categorized: refunds in the same category reduce spend.
-        // Uncategorized: always count full spend; its income stays in Income
-        // so paychecks left uncategorized don't wipe the Expenses total.
-        if (id === null) {
-          expense += bucket.expense;
-          income += bucket.income;
-        } else {
-          expense += bucket.expense - bucket.income;
-        }
-      } else {
-        income += bucket.income;
+      // Only the Income category counts toward Income; refunds elsewhere
+      // reduce Expenses instead.
+      if (t.categoryId && incomeCategoryIds.has(t.categoryId)) {
+        income += t.income;
+        continue;
       }
+
+      const net = t.expense - t.income;
+      if (net === 0) continue;
+      expense += net;
+      const key = t.categoryId;
+      byCategory.set(key, (byCategory.get(key) ?? 0) + net);
     }
 
     // Show every category except Income (and Ignore, already filtered out).
-    // Income-only buckets appear as negative spend.
+    // Refunds / income-only non-Income buckets appear as negative spend.
     const categoryRows = Array.from(byCategory.entries())
-      .flatMap(([id, bucket]) => {
+      .filter(([, amount]) => amount !== 0)
+      .map(([id, amount]) => {
         const cat = id ? categories.find((c) => c.id === id) : null;
-        if (isSpecialCategoryName(cat?.name, "income")) return [];
-        const amount = bucket.expense - bucket.income;
-        if (amount === 0) return [];
-        return [
-          {
-            id,
-            name: cat?.name ?? "Uncategorized",
-            color: cat?.color ?? "#9ca3af",
-            amount,
-          },
-        ];
+        return {
+          id,
+          name: cat?.name ?? "Uncategorized",
+          color: cat?.color ?? "#9ca3af",
+          amount,
+        };
       })
       .sort((a, b) => b.amount - a.amount);
 
@@ -110,7 +103,14 @@ export default function DashboardPage() {
       maxAbs,
       hasAccounts: accounts.some((a) => !a.archived),
     };
-  }, [transactions, categories, accounts, range, ignoreCategoryIds]);
+  }, [
+    transactions,
+    categories,
+    accounts,
+    range,
+    ignoreCategoryIds,
+    incomeCategoryIds,
+  ]);
 
   if (loading) {
     return <p className="text-ink-muted animate-fade">Loading dashboard…</p>;
@@ -186,16 +186,16 @@ export default function DashboardPage() {
       <section className="surface rounded-2xl p-5 sm:p-6 animate-rise stagger-3">
         <div className="mb-5 flex items-center justify-between gap-3">
           <h2 className="font-display text-xl text-navy">Spend by category</h2>
-          <Link href="/app/import" className="btn btn-ghost !py-2 text-sm">
+          <Link href="/app/add" className="btn btn-ghost !py-2 text-sm">
             <Upload size={16} />
-            Import CSV
+            Add
           </Link>
         </div>
 
         {stats.categoryRows.length === 0 ? (
           <p className="py-8 text-center text-ink-muted">
             No activity in this range yet.{" "}
-            <Link href="/app/import" className="font-semibold text-navy underline">
+            <Link href="/app/add" className="font-semibold text-navy underline">
               Import a CSV
             </Link>{" "}
             to get started.

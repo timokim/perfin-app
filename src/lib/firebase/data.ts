@@ -377,6 +377,48 @@ async function existingFingerprints(
   return new Set(snap.docs.map((d) => d.data().fingerprint as string));
 }
 
+export async function createManualTransaction(
+  uid: string,
+  input: {
+    date: Date;
+    description: string;
+    note?: string;
+    income: number;
+    expense: number;
+    accountId: string;
+    categoryId?: string | null;
+  },
+): Promise<string> {
+  const db = getClientDb();
+  const row = {
+    date: input.date,
+    description: input.description.trim(),
+    income: input.income,
+    expense: input.expense,
+    note: input.note?.trim() ?? "",
+  };
+  const fp = fingerprintRow(row, input.accountId);
+  const existing = await existingFingerprints(uid, input.accountId);
+  if (existing.has(fp)) {
+    throw new Error(
+      "A matching transaction already exists for this account (same date, amount, and description).",
+    );
+  }
+  const ref = await addDoc(collection(db, transactionsCol(uid)), {
+    date: Timestamp.fromDate(input.date),
+    description: row.description,
+    note: row.note,
+    income: input.income,
+    expense: input.expense,
+    accountId: input.accountId,
+    categoryId: input.categoryId ?? null,
+    importId: "manual",
+    fingerprint: fp,
+    createdAt: Timestamp.now(),
+  });
+  return ref.id;
+}
+
 export async function importTransactions(
   uid: string,
   input: {

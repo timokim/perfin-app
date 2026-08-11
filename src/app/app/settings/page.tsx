@@ -453,25 +453,29 @@ export default function SettingsPage() {
             return (
               <li
                 key={c.id}
-                className={`flex flex-wrap items-center gap-3 py-3 ${c.archived ? "opacity-50" : ""}`}
+                className={`flex items-center gap-3 py-3 ${c.archived ? "opacity-50" : ""}`}
               >
                 <span
                   className="h-3 w-3 shrink-0 rounded-full"
                   style={{ background: c.color }}
                 />
-                <div className="min-w-0 flex-1 basis-32">
-                  <p className="truncate font-semibold">{c.name}</p>
-                  {c.archived && (
-                    <p className="text-xs text-ink-muted">archived</p>
-                  )}
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-semibold">
+                    {c.name}
+                    {c.archived ? (
+                      <span className="ml-2 text-xs font-normal text-ink-muted">
+                        archived
+                      </span>
+                    ) : null}
+                  </p>
                 </div>
                 {special ? (
-                  <span className="text-xs font-semibold text-ink-muted">
+                  <span className="shrink-0 text-xs font-semibold text-ink-muted">
                     System category
                   </span>
                 ) : (
                   <select
-                    className="select w-auto min-w-[11rem] !py-1.5 text-sm"
+                    className="select !mt-0 !w-auto max-w-[14rem] shrink-0 !py-1.5 text-sm"
                     value={c.budgetBucket ?? ""}
                     aria-label={`Budget bucket for ${c.name}`}
                     onChange={(e) =>
@@ -492,14 +496,14 @@ export default function SettingsPage() {
                 )}
                 <button
                   type="button"
-                  className="btn btn-ghost !px-2 !py-2"
+                  className="btn btn-ghost shrink-0 !px-2 !py-2"
                   onClick={() => renameCategory(c.id, c.name)}
                 >
                   <Pencil size={14} />
                 </button>
                 <button
                   type="button"
-                  className="btn btn-ghost !px-2 !py-2"
+                  className="btn btn-ghost shrink-0 !px-2 !py-2"
                   onClick={() =>
                     user &&
                     updateCategory(user.uid, c.id, { archived: !c.archived })
@@ -509,7 +513,7 @@ export default function SettingsPage() {
                 </button>
                 <button
                   type="button"
-                  className="btn btn-ghost !px-2 !py-2 text-danger"
+                  className="btn btn-ghost shrink-0 !px-2 !py-2 text-danger"
                   onClick={() => {
                     if (
                       user &&
