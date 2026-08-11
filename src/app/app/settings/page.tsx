@@ -36,13 +36,18 @@ export default function SettingsPage() {
   const [editAccountType, setEditAccountType] =
     useState<AccountType>("checking");
 
-  const latestTxnByAccount = useMemo(() => {
-    const latest = new Map<string, Date>();
+  const txnRangeByAccount = useMemo(() => {
+    const ranges = new Map<string, { oldest: Date; latest: Date }>();
     for (const t of transactions) {
-      const prev = latest.get(t.accountId);
-      if (!prev || t.date > prev) latest.set(t.accountId, t.date);
+      const prev = ranges.get(t.accountId);
+      if (!prev) {
+        ranges.set(t.accountId, { oldest: t.date, latest: t.date });
+      } else {
+        if (t.date < prev.oldest) prev.oldest = t.date;
+        if (t.date > prev.latest) prev.latest = t.date;
+      }
     }
-    return latest;
+    return ranges;
   }, [transactions]);
 
   const sortedAccounts = useMemo(
@@ -162,8 +167,7 @@ export default function SettingsPage() {
         <h2 className="font-display text-xl text-navy">Accounts</h2>
         <p className="mt-1 text-sm text-ink-muted">
           Chequing, credit cards, savings — whatever you import against. Each
-          account shows the date of its newest transaction so you can see how
-          far imports have reached.
+          account shows the date range of its imported transactions.
         </p>
 
         <form
@@ -230,7 +234,7 @@ export default function SettingsPage() {
             </li>
           )}
           {sortedAccounts.map((a) => {
-            const latest = latestTxnByAccount.get(a.id);
+            const range = txnRangeByAccount.get(a.id);
             const editing = editingAccountId === a.id;
 
             if (editing) {
@@ -306,7 +310,7 @@ export default function SettingsPage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                     <p className="truncate font-semibold">{a.name}</p>
-                    {!latest && !a.archived && (
+                    {!range && !a.archived && (
                       <span className="text-xs font-semibold text-amber">
                         No imports yet
                       </span>
@@ -315,8 +319,10 @@ export default function SettingsPage() {
                   <p className="text-xs text-ink-muted">
                     {ACCOUNT_TYPE_LABELS[a.type]}
                     {a.archived ? " · archived" : ""}
-                    {latest
-                      ? ` · Latest txn ${formatDate(latest)}`
+                    {range
+                      ? range.oldest.getTime() === range.latest.getTime()
+                        ? ` · ${formatDate(range.oldest)}`
+                        : ` · ${formatDate(range.oldest)} – ${formatDate(range.latest)}`
                       : a.archived
                         ? " · no imports"
                         : ""}

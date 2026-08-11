@@ -102,12 +102,12 @@ function findHeader(
 
 function looksLikeDate(value: string): boolean {
   if (!value) return false;
-  const d = Date.parse(value);
-  if (!Number.isNaN(d)) return true;
-  // DD/MM/YYYY or MM/DD/YYYY
+  // Prefer explicit patterns before Date.parse (avoids accepting random words).
   if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(value)) return true;
-  // YYYY-MM-DD
   if (/^\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}$/.test(value)) return true;
+  if (/^[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{2,4}$/.test(value)) return true;
+  const d = Date.parse(value);
+  if (!Number.isNaN(d) && /\d/.test(value)) return true;
   return false;
 }
 
@@ -115,6 +115,47 @@ function looksLikeMoney(value: string): boolean {
   if (!value) return false;
   const cleaned = value.replace(/[$,\sCAD]/g, "").replace(/^\((.*)\)$/, "-$1");
   return /^-?\d+(\.\d{1,2})?$/.test(cleaned);
+}
+
+const KNOWN_HEADER_TOKENS = [
+  ...DATE_HEADERS,
+  ...DESC_HEADERS,
+  ...AMOUNT_HEADERS,
+  ...DEBIT_HEADERS,
+  ...CREDIT_HEADERS,
+  ...INCOME_HEADERS,
+  ...EXPENSE_HEADERS,
+  ...NOISE_HEADERS,
+];
+
+/**
+ * True when the first CSV row looks like column names rather than a transaction.
+ * Headerless bank exports often start with a date in column 1.
+ */
+export function rowLooksLikeHeader(cells: string[]): boolean {
+  const nonempty = cells.map((c) => c.trim()).filter(Boolean);
+  if (nonempty.length === 0) return false;
+
+  // Data row: starts with a transaction date.
+  if (looksLikeDate(nonempty[0]!)) return false;
+
+  const moneyHits = nonempty.filter(looksLikeMoney).length;
+  // Data row: multiple numeric amount/balance fields.
+  if (moneyHits >= 2) return false;
+
+  const normalized = nonempty.map(normalizeHeader);
+  const knownHits = normalized.filter((n) =>
+    KNOWN_HEADER_TOKENS.some(
+      (k) => n === k || (k.length >= 4 && (n.includes(k) || k.includes(n))),
+    ),
+  ).length;
+  if (knownHits >= 1) return true;
+
+  // Mostly short non-numeric labels → header row.
+  const labelLike = nonempty.filter(
+    (c) => !looksLikeMoney(c) && !looksLikeDate(c) && c.length <= 40,
+  ).length;
+  return labelLike >= Math.ceil(nonempty.length * 0.6);
 }
 
 /**
@@ -208,6 +249,123 @@ function bestColumn(
   return bestScore > 0 ? best : null;
 }
 
+function columnSamples(
+  rows: Record<string, string>[],
+  header: string,
+  limit = 40,
+): string[] {
+  return rows.slice(0, limit).map((r) => r[header] ?? "");
+}
+
+function isSparseMoneyColumn(samples: string[]): boolean {
+  if (looksLikeRunningBalance(samples)) return false;
+  const moneyHits = samples.filter(looksLikeMoney).length;
+  if (moneyHits < 2) return false;
+  const blankRatio =
+    samples.filter((s) => !s.trim()).length / Math.max(samples.length, 1);
+  // Withdrawal/deposit columns are often empty on the other side of each row.
+  return blankRatio >= 0.15 && moneyHits / samples.length <= 0.9;
+}
+
+/**
+ * Find complementary debit/credit (or expense/income) columns from values when
+ * headers are synthetic or unnamed — common in headerless bank CSVs.
+ */
+function inferDebitCreditFromShape(
+  headers: string[],
+  rows: Record<string, string>[],
+  exclude: Set<string>,
+): { debit: string; credit: string } | null {
+  const candidates = headers.filter((h) => {
+    if (exclude.has(h) || isNoiseHeader(h)) return false;
+    return isSparseMoneyColumn(columnSamples(rows, h));
+  });
+  if (candidates.length < 2) return null;
+
+  let bestPair: { debit: string; credit: string; score: number } | null = null;
+
+  for (let i = 0; i < candidates.length; i++) {
+    for (let j = i + 1; j < candidates.length; j++) {
+      const a = candidates[i]!;
+      const b = candidates[j]!;
+      const sampleCount = Math.min(rows.length, 40);
+      let complementary = 0;
+      let bothFilled = 0;
+      let aOnly = 0;
+      let bOnly = 0;
+
+      for (let r = 0; r < sampleCount; r++) {
+        const av = looksLikeMoney(rows[r]?.[a] ?? "");
+        const bv = looksLikeMoney(rows[r]?.[b] ?? "");
+        if (av && bv) bothFilled += 1;
+        else if (av || bv) {
+          complementary += 1;
+          if (av) aOnly += 1;
+          else bOnly += 1;
+        }
+      }
+
+      const decided = complementary + bothFilled;
+      if (decided < 3) continue;
+      // Prefer pairs that are usually one-or-the-other, not both.
+      const score = complementary - bothFilled * 2;
+      if (score < 2) continue;
+      if (aOnly === 0 || bOnly === 0) continue;
+
+      // Assign debit vs credit using running-balance correlation when possible.
+      const balanceHeader = headers.find((h) => {
+        if (exclude.has(h) || h === a || h === b) return false;
+        return looksLikeRunningBalance(columnSamples(rows, h));
+      });
+
+      let debit = a;
+      let credit = b;
+      if (balanceHeader) {
+        let aDown = 0;
+        let aUp = 0;
+        let bDown = 0;
+        let bUp = 0;
+        for (let r = 1; r < sampleCount; r++) {
+          const prevBal = parseMoney(rows[r - 1]?.[balanceHeader] ?? "");
+          const bal = parseMoney(rows[r]?.[balanceHeader] ?? "");
+          if (prevBal == null || bal == null) continue;
+          const delta = bal - prevBal;
+          if (looksLikeMoney(rows[r]?.[a] ?? "")) {
+            if (delta < 0) aDown += 1;
+            if (delta > 0) aUp += 1;
+          }
+          if (looksLikeMoney(rows[r]?.[b] ?? "")) {
+            if (delta < 0) bDown += 1;
+            if (delta > 0) bUp += 1;
+          }
+        }
+        const aIsDebit = aDown - aUp >= bDown - bUp;
+        debit = aIsDebit ? a : b;
+        credit = aIsDebit ? b : a;
+      } else {
+        // Bank exports usually list withdrawals/debits before deposits/credits.
+        const aIndex = headers.indexOf(a);
+        const bIndex = headers.indexOf(b);
+        if (aIndex <= bIndex) {
+          debit = a;
+          credit = b;
+        } else {
+          debit = b;
+          credit = a;
+        }
+      }
+
+      if (!bestPair || score > bestPair.score) {
+        bestPair = { debit, credit, score };
+      }
+    }
+  }
+
+  return bestPair
+    ? { debit: bestPair.debit, credit: bestPair.credit }
+    : null;
+}
+
 export function inferColumnMapping(
   headers: string[],
   rows: Record<string, string>[],
@@ -233,6 +391,7 @@ export function inferColumnMapping(
   const expenseCol = findHeader(headers, EXPENSE_HEADERS);
   const debitCol = findHeader(headers, DEBIT_HEADERS);
   const creditCol = findHeader(headers, CREDIT_HEADERS);
+  const shaped = inferDebitCreditFromShape(headers, rows, exclude);
   const amountCol =
     findHeader(headers, AMOUNT_HEADERS) ??
     bestColumn(headers, rows, "money", exclude);
@@ -252,6 +411,10 @@ export function inferColumnMapping(
     mapping.amountMode = "debit_credit";
     mapping.debit = debitCol;
     mapping.credit = creditCol;
+  } else if (shaped) {
+    mapping.amountMode = "debit_credit";
+    mapping.debit = shaped.debit;
+    mapping.credit = shaped.credit;
   } else if (amountCol) {
     const samples = rows
       .slice(0, 30)

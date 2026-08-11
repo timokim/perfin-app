@@ -2,18 +2,23 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { DateRangePicker } from "@/components/DateRangePicker";
 import { useData } from "@/lib/data-context";
 import {
   currentMonthKey,
   formatMoney,
   monthKey,
-  parseMonthKey,
+  rangeForPreset,
+  type DateRangeValue,
 } from "@/lib/format";
+import { isSpecialCategoryName } from "@/lib/types";
 import { AlertCircle, Upload } from "lucide-react";
 
 export default function DashboardPage() {
   const { transactions, categories, accounts, loading } = useData();
-  const [month, setMonth] = useState(currentMonthKey());
+  const [range, setRange] = useState<DateRangeValue>(() =>
+    rangeForPreset(`month:${currentMonthKey()}`),
+  );
 
   const monthOptions = useMemo(() => {
     const keys = new Set<string>();
@@ -22,10 +27,20 @@ export default function DashboardPage() {
     return Array.from(keys).sort().reverse();
   }, [transactions]);
 
+  const ignoreCategoryIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const c of categories) {
+      if (isSpecialCategoryName(c.name, "ignore")) ids.add(c.id);
+    }
+    return ids;
+  }, [categories]);
+
   const stats = useMemo(() => {
-    const { start, end } = parseMonthKey(month);
-    const inMonth = transactions.filter(
-      (t) => t.date >= start && t.date <= end,
+    const inRange = transactions.filter(
+      (t) =>
+        t.date >= range.start &&
+        t.date <= range.end &&
+        !(t.categoryId && ignoreCategoryIds.has(t.categoryId)),
     );
     let uncategorized = 0;
     // Per category: expenses minus income (refunds). Uncategorized uses null key.
@@ -34,7 +49,7 @@ export default function DashboardPage() {
       { expense: number; income: number }
     >();
 
-    for (const t of inMonth) {
+    for (const t of inRange) {
       if (!t.categoryId && t.expense > 0) uncategorized += 1;
       if (t.expense === 0 && t.income === 0) continue;
       const key = t.categoryId;
@@ -62,26 +77,23 @@ export default function DashboardPage() {
       }
     }
 
-    // Include categories that had spend even when refunds make the month net-negative.
+    // Show every category except Income (and Ignore, already filtered out).
+    // Income-only buckets appear as negative spend.
     const categoryRows = Array.from(byCategory.entries())
-      .filter(([, bucket]) => bucket.expense > 0)
-      .map(([id, bucket]) => {
-        // Match the Expenses card: uncategorized shows gross spend; others are net.
-        const amount =
-          id === null
-            ? bucket.expense
-            : bucket.expense - bucket.income;
-        const cat = id
-          ? categories.find((c) => c.id === id)
-          : null;
-        return {
-          id,
-          name: cat?.name ?? "Uncategorized",
-          color: cat?.color ?? "#9ca3af",
-          amount,
-        };
+      .flatMap(([id, bucket]) => {
+        const cat = id ? categories.find((c) => c.id === id) : null;
+        if (isSpecialCategoryName(cat?.name, "income")) return [];
+        const amount = bucket.expense - bucket.income;
+        if (amount === 0) return [];
+        return [
+          {
+            id,
+            name: cat?.name ?? "Uncategorized",
+            color: cat?.color ?? "#9ca3af",
+            amount,
+          },
+        ];
       })
-      .filter((row) => row.amount !== 0)
       .sort((a, b) => b.amount - a.amount);
 
     const maxAbs =
@@ -93,12 +105,12 @@ export default function DashboardPage() {
       expense,
       net: income - expense,
       uncategorized,
-      count: inMonth.length,
+      count: inRange.length,
       categoryRows,
       maxAbs,
       hasAccounts: accounts.some((a) => !a.archived),
     };
-  }, [transactions, categories, accounts, month]);
+  }, [transactions, categories, accounts, range, ignoreCategoryIds]);
 
   if (loading) {
     return <p className="text-ink-muted animate-fade">Loading dashboard…</p>;
@@ -110,26 +122,14 @@ export default function DashboardPage() {
         <div>
           <h1 className="font-display text-3xl text-navy">Dashboard</h1>
           <p className="mt-1 text-ink-muted">
-            Spending by category for the month you pick.
+            Spending by category for the range you pick.
           </p>
         </div>
-        <div>
-          <label className="label" htmlFor="month">
-            Month
-          </label>
-          <select
-            id="month"
-            className="select w-auto min-w-[10rem]"
-            value={month}
-            onChange={(e) => setMonth(e.target.value)}
-          >
-            {monthOptions.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
-        </div>
+        <DateRangePicker
+          value={range}
+          onChange={setRange}
+          monthOptions={monthOptions}
+        />
       </div>
 
       {!stats.hasAccounts && (
@@ -194,7 +194,7 @@ export default function DashboardPage() {
 
         {stats.categoryRows.length === 0 ? (
           <p className="py-8 text-center text-ink-muted">
-            No expenses this month yet.{" "}
+            No activity in this range yet.{" "}
             <Link href="/app/import" className="font-semibold text-navy underline">
               Import a CSV
             </Link>{" "}

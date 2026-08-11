@@ -65,7 +65,36 @@ export async function ensureUserSeeded(uid: string): Promise<void> {
       });
     }
     await batch.commit();
+    return;
   }
+
+  // Existing users: ensure dashboard specials exist (Ignore, Income).
+  const existing = new Set(
+    catsSnap.docs.map((d) =>
+      String(d.data().name ?? "")
+        .trim()
+        .toLowerCase(),
+    ),
+  );
+  const required = DEFAULT_CATEGORIES.filter((cat) => {
+    const key = cat.name.trim().toLowerCase();
+    return key === "ignore" || key === "income";
+  });
+  const missing = required.filter(
+    (cat) => !existing.has(cat.name.trim().toLowerCase()),
+  );
+  if (missing.length === 0) return;
+
+  const batch = writeBatch(db);
+  for (const cat of missing) {
+    const ref = doc(collection(db, categoriesCol(uid)));
+    batch.set(ref, {
+      ...cat,
+      archived: false,
+      createdAt: Timestamp.now(),
+    });
+  }
+  await batch.commit();
 }
 
 export function listenAccounts(

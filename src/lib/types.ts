@@ -76,9 +76,22 @@ export const DEFAULT_CATEGORIES: Omit<Category, "id" | "createdAt">[] = [
   { name: "Utility", color: "#3d5a80", iconKey: "zap" },
   { name: "Transport", color: "#5c4b7a", iconKey: "car" },
   { name: "Income", color: "#2d6a4f", iconKey: "wallet" },
+  { name: "Ignore", color: "#9ca3af", iconKey: "eye-off" },
   { name: "Misc", color: "#6b7280", iconKey: "tag" },
 ];
 
+/** Built-in category names matched case-insensitively. */
+export const SPECIAL_CATEGORY_NAMES = {
+  income: "income",
+  ignore: "ignore",
+} as const;
+
+export function isSpecialCategoryName(
+  name: string | null | undefined,
+  kind: keyof typeof SPECIAL_CATEGORY_NAMES,
+): boolean {
+  return (name ?? "").trim().toLowerCase() === SPECIAL_CATEGORY_NAMES[kind];
+}
 export const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
   checking: "Chequing",
   credit: "Credit card",
