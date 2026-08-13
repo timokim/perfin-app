@@ -16,12 +16,27 @@ type Step = "upload" | "map" | "preview" | "done";
 
 type PreviewRow = NormalizedRow & {
   sourceIndex: number;
+  sourceFile: string;
   fingerprint: string;
   /** Already in Firestore for this account. */
   alreadyImported: boolean;
-  /** Same fingerprint appears earlier in this CSV. */
+  /** Same fingerprint appears earlier in this batch. */
   duplicateInFile: boolean;
 };
+
+type SourceRow = Record<string, string> & { __sourceFile: string };
+
+function headersMatch(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((h, i) => h === b[i]);
+}
+
+function formatFileList(names: string[]): string {
+  if (names.length === 0) return "";
+  if (names.length === 1) return names[0]!;
+  if (names.length === 2) return `${names[0]} + ${names[1]}`;
+  return `${names[0]} + ${names.length - 1} more`;
+}
 
 const AMOUNT_MODE_LABELS: Record<AmountMode, string> = {
   signed: "Single amount (signed +/-)",
@@ -34,9 +49,9 @@ export function ImportCsvPanel() {
   const { user } = useAuth();
   const { activeAccounts, transactions } = useData();
   const [step, setStep] = useState<Step>("upload");
-  const [filename, setFilename] = useState("");
+  const [filenames, setFilenames] = useState<string[]>([]);
   const [headers, setHeaders] = useState<string[]>([]);
-  const [rows, setRows] = useState<Record<string, string>[]>([]);
+  const [rows, setRows] = useState<SourceRow[]>([]);
   const [mapping, setMapping] = useState<ColumnMapping | null>(null);
   const [accountId, setAccountId] = useState("");
   const [dragOver, setDragOver] = useState(false);
@@ -65,7 +80,8 @@ export function ImportCsvPanel() {
     // Fingerprints need an account; before one is chosen, treat rows as not-yet-imported.
     const accountKey = accountId || "__pending__";
     rows.forEach((row, sourceIndex) => {
-      const n = normalizeRow(row, mapping);
+      const { __sourceFile, ...cells } = row;
+      const n = normalizeRow(cells, mapping);
       if (!n) return;
       const fp = fingerprintRow(n, accountKey);
       const duplicateInFile = seenInFile.has(fp);
@@ -73,6 +89,7 @@ export function ImportCsvPanel() {
       out.push({
         ...n,
         sourceIndex,
+        sourceFile: __sourceFile,
         note: notes[sourceIndex] ?? "",
         fingerprint: fp,
         alreadyImported: Boolean(accountId) && existingFingerprints.has(fp),
@@ -104,17 +121,57 @@ export function ImportCsvPanel() {
     [included],
   );
 
-  const onFile = useCallback(async (file: File) => {
+  const onFiles = useCallback(async (fileList: FileList | File[]) => {
     setError(null);
+    const files = Array.from(fileList).filter(
+      (f) =>
+        f.name.toLowerCase().endsWith(".csv") ||
+        f.type === "text/csv" ||
+        f.type === "application/vnd.ms-excel" ||
+        f.type === "",
+    );
+    if (files.length === 0) {
+      setError("Choose one or more CSV files.");
+      return;
+    }
+
     try {
-      const parsed = await parseCsvFile(file);
-      if (!parsed.headers.length || !parsed.rows.length) {
-        throw new Error("CSV looks empty. Check the file and try again.");
+      const parsed = await Promise.all(
+        files.map(async (file) => {
+          const result = await parseCsvFile(file);
+          return { file, ...result };
+        }),
+      );
+
+      for (const item of parsed) {
+        if (!item.headers.length || !item.rows.length) {
+          throw new Error(`“${item.file.name}” looks empty. Check the file and try again.`);
+        }
       }
-      const inferred = inferColumnMapping(parsed.headers, parsed.rows);
-      setFilename(file.name);
-      setHeaders(parsed.headers);
-      setRows(parsed.rows);
+
+      const base = parsed[0]!;
+      for (const item of parsed.slice(1)) {
+        if (!headersMatch(base.headers, item.headers)) {
+          throw new Error(
+            `“${item.file.name}” doesn’t match the columns in “${base.file.name}”. Multi-file import requires the same format/schema.`,
+          );
+        }
+      }
+
+      const merged: SourceRow[] = [];
+      for (const item of parsed) {
+        for (const row of item.rows) {
+          merged.push({ ...row, __sourceFile: item.file.name });
+        }
+      }
+
+      const inferred = inferColumnMapping(
+        base.headers,
+        merged.map(({ __sourceFile: _, ...cells }) => cells),
+      );
+      setFilenames(parsed.map((p) => p.file.name));
+      setHeaders(base.headers);
+      setRows(merged);
       setMapping(inferred);
       setExcluded(new Set());
       setNotes({});
@@ -127,8 +184,7 @@ export function ImportCsvPanel() {
   function onDrop(e: React.DragEvent) {
     e.preventDefault();
     setDragOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) void onFile(file);
+    if (e.dataTransfer.files?.length) void onFiles(e.dataTransfer.files);
   }
 
   async function runImport() {
@@ -137,12 +193,13 @@ export function ImportCsvPanel() {
     setError(null);
     try {
       const record = await importTransactions(user.uid, {
-        filename,
+        filename: formatFileList(filenames),
         accountId,
         mapping,
         rows: newToImport.map(
           ({
             sourceIndex: _s,
+            sourceFile: _sf,
             fingerprint: _f,
             alreadyImported: _a,
             duplicateInFile: _d,
@@ -167,7 +224,7 @@ export function ImportCsvPanel() {
 
   function reset() {
     setStep("upload");
-    setFilename("");
+    setFilenames([]);
     setHeaders([]);
     setRows([]);
     setMapping(null);
@@ -197,14 +254,16 @@ export function ImportCsvPanel() {
     setNotes((prev) => ({ ...prev, [sourceIndex]: note }));
   }
 
+  const showSourceFile = filenames.length > 1;
+
   return (
     <div className="space-y-8">
       <div>
         <h2 className="font-display text-xl text-navy">Import CSV</h2>
         <p className="mt-1 text-sm text-ink-muted">
-          Outlay infers date, description, and amount columns — confirm the
-          mapping, trim rows, add notes, then import. Re-importing the same
-          file skips duplicates.
+          Drop one or more bank exports with the same columns. Outlay infers
+          mapping, then you review rows before they’re saved. Duplicates are
+          skipped.
         </p>
       </div>
 
@@ -242,21 +301,23 @@ export function ImportCsvPanel() {
         >
           <Upload className="mx-auto text-navy" size={36} />
           <p className="mt-4 font-semibold text-navy">
-            Drop a CSV here, or choose a file
+            Drop CSVs here, or choose files
           </p>
           <p className="mt-1 text-sm text-ink-muted">
-            Works with Amex, Wealthsimple, TD, and most bank exports.
+            Select multiple files for the same account when they share the same
+            columns (e.g. monthly TD exports).
           </p>
           <label className="btn btn-amber mt-6 cursor-pointer">
             <FileSpreadsheet size={16} />
-            Choose CSV
+            Choose CSVs
             <input
               type="file"
               accept=".csv,text/csv"
+              multiple
               className="hidden"
               onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) void onFile(file);
+                if (e.target.files?.length) void onFiles(e.target.files);
+                e.target.value = "";
               }}
             />
           </label>
@@ -267,8 +328,16 @@ export function ImportCsvPanel() {
         <div className="space-y-6 animate-rise">
           <div className="surface rounded-2xl p-5 sm:p-6">
             <p className="text-sm text-ink-muted">
-              File: <span className="font-semibold text-ink">{filename}</span> ·{" "}
-              {rows.length} rows
+              {filenames.length === 1 ? "File" : "Files"}:{" "}
+              <span className="font-semibold text-ink">
+                {formatFileList(filenames)}
+              </span>
+              {filenames.length > 1 && (
+                <span className="mt-1 block text-xs">
+                  {filenames.join(" · ")}
+                </span>
+              )}{" "}
+              · {rows.length} rows combined
             </p>
 
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
@@ -488,7 +557,7 @@ export function ImportCsvPanel() {
                     ? ` · ${alreadyImportedCount} already imported`
                     : ""}
                   {duplicateInFileCount > 0
-                    ? ` · ${duplicateInFileCount} duplicate in file`
+                    ? ` · ${duplicateInFileCount} duplicate in batch`
                     : ""}
                   {excluded.size > 0 ? ` · ${excluded.size} removed` : ""}. Add
                   notes for opaque bank memos; remove junk rows before
@@ -510,6 +579,9 @@ export function ImportCsvPanel() {
                 <thead className="bg-paper-deep/60 text-ink-muted">
                   <tr>
                     <th className="px-4 py-3 font-semibold">Status</th>
+                    {showSourceFile && (
+                      <th className="px-4 py-3 font-semibold">File</th>
+                    )}
                     <th className="px-4 py-3 font-semibold">Date</th>
                     <th className="px-4 py-3 font-semibold">Description</th>
                     <th className="px-4 py-3 font-semibold">Note</th>
@@ -526,7 +598,7 @@ export function ImportCsvPanel() {
                   {included.length === 0 && (
                     <tr>
                       <td
-                        colSpan={7}
+                        colSpan={showSourceFile ? 8 : 7}
                         className="px-4 py-12 text-center text-ink-muted"
                       >
                         All rows removed. Restore some to continue.
@@ -550,7 +622,7 @@ export function ImportCsvPanel() {
                             </span>
                           ) : row.duplicateInFile ? (
                             <span className="text-xs font-semibold text-amber">
-                              Duplicate in file
+                              Duplicate in batch
                             </span>
                           ) : (
                             <span className="text-xs font-semibold text-success">
@@ -558,6 +630,13 @@ export function ImportCsvPanel() {
                             </span>
                           )}
                         </td>
+                        {showSourceFile && (
+                          <td className="px-4 py-2.5 max-w-[8rem] align-top text-xs text-ink-muted">
+                            <span className="line-clamp-2" title={row.sourceFile}>
+                              {row.sourceFile}
+                            </span>
+                          </td>
+                        )}
                         <td className="px-4 py-2.5 whitespace-nowrap align-top">
                           {formatDate(row.date)}
                         </td>
