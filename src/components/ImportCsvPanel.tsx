@@ -96,6 +96,11 @@ export function ImportCsvPanel() {
         duplicateInFile,
       });
     });
+    // Newest first (single or multi-file). Stable tie-break by source index.
+    out.sort(
+      (a, b) =>
+        b.date.getTime() - a.date.getTime() || a.sourceIndex - b.sourceIndex,
+    );
     return out;
   }, [rows, mapping, notes, accountId, existingFingerprints]);
 

@@ -280,14 +280,15 @@ function TransactionsInner() {
         </div>
       )}
 
-      <div className="surface overflow-hidden rounded-2xl animate-rise stagger-2">
+      <div className="overflow-hidden rounded-2xl border border-line bg-white animate-rise stagger-2">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[52rem] text-left text-sm">
-            <thead className="bg-paper-deep/60 text-ink-muted">
+            <thead className="bg-navy text-white">
               <tr>
                 <th className="px-3 py-3">
                   <input
                     type="checkbox"
+                    className="accent-amber"
                     checked={
                       filtered.length > 0 && selected.size === filtered.length
                     }
@@ -314,13 +315,17 @@ function TransactionsInner() {
                   </td>
                 </tr>
               )}
-              {filtered.map((t) => {
+              {filtered.map((t, index) => {
                 const account = accountMap.get(t.accountId);
                 return (
                   <tr
                     key={t.id}
-                    className={`border-t border-line ${
-                      selected.has(t.id) ? "bg-amber/5" : ""
+                    className={`border-t border-line/80 ${
+                      selected.has(t.id)
+                        ? "bg-amber/15"
+                        : index % 2 === 1
+                          ? "bg-[#f3f6f8]"
+                          : "bg-white"
                     }`}
                   >
                     <td className="px-3 py-2.5 align-top">
